@@ -1,0 +1,47 @@
+# ── Environment ──
+.env
+.env.local
+.env.production
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# ── Node.js ──
+node_modules/
+.next/
+out/
+.turbo/
+
+# ── Electron ──
+desktop-agent/dist/
+desktop-agent/release/
+
+# ── Docker ──
+docker/nginx/ssl/
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Logs ──
+*.log
+logs/
+
+# ── Database ──
+*.sql.bak
