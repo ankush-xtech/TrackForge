@@ -3,15 +3,16 @@ FastAPI application entry point.
 """
 
 import logging
-import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.middleware.logging_middleware import RequestLoggingMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.request_id import RequestIDMiddleware
 import app.models  # noqa: F401 — register all models with SQLAlchemy mapper
 
 # Configure logging
@@ -42,26 +43,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-
-# ── DEBUG: Catch ALL unhandled exceptions and return details in response ──
-@app.exception_handler(Exception)
-async def debug_exception_handler(request: Request, exc: Exception):
-    """Return full traceback in response during development."""
-    tb = traceback.format_exc()
-    print(f"\n{'='*60}\nUNHANDLED EXCEPTION on {request.method} {request.url.path}\n{'='*60}")
-    print(tb)
-    print(f"{'='*60}\n")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "detail": str(exc),
-            "type": type(exc).__name__,
-            "traceback": tb,
-        },
-    )
-
-
-# CORS only — removed custom middleware temporarily for debugging
+# ── Middleware stack (order matters: last added = first executed) ──
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(RequestIDMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
@@ -81,32 +66,3 @@ async def root():
         "version": settings.APP_VERSION,
         "docs": "/docs",
     }
-
-
-@app.get("/debug/db")
-async def debug_db():
-    """Debug endpoint to check DB connectivity and tables."""
-    from sqlalchemy import text
-    from app.core.database import async_session_factory
-    try:
-        async with async_session_factory() as session:
-            # Check which database we're connected to
-            db_result = await session.execute(text("SELECT current_database()"))
-            db_name = db_result.scalar()
-
-            # Check tables
-            tables_result = await session.execute(text(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'public' ORDER BY table_name"
-            ))
-            tables = [row[0] for row in tables_result.fetchall()]
-
-            return {
-                "database": db_name,
-                "database_url_db": settings.POSTGRES_DB,
-                "tables_count": len(tables),
-                "tables": tables,
-                "has_users": "users" in tables,
-            }
-    except Exception as e:
-        return {"error": str(e)}

@@ -12,13 +12,19 @@ from pydantic import BaseModel, Field
 class TimeEntryCreate(BaseModel):
     project_id: uuid.UUID | None = None
     task_id: uuid.UUID | None = None
-    start_time: datetime
+    start_time: datetime | None = None  # defaults to now() on server
     description: str | None = None
     is_manual: bool = False
 
 
 class TimeEntryStop(BaseModel):
-    end_time: datetime
+    end_time: datetime | None = None  # defaults to now() on server
+
+
+class TimeEntryUpdate(BaseModel):
+    project_id: uuid.UUID | None = None
+    task_id: uuid.UUID | None = None
+    description: str | None = None
 
 
 class TimeEntryResponse(BaseModel):
@@ -120,3 +126,15 @@ class AgentSyncPayload(BaseModel):
     activity_logs: list[ActivityLogCreate] = []
     app_usage: list[AppUsageCreate] = []
     # Screenshot binary data is sent separately via multipart upload
+
+
+# ── Summary / Stats ──
+class TrackingSummary(BaseModel):
+    """Aggregated tracking stats for the current user."""
+    today_seconds: int = 0
+    week_seconds: int = 0
+    month_seconds: int = 0
+    entries_today: int = 0
+    avg_activity_percent: float = 0.0
+    is_tracking: bool = False
+    active_entry_id: str | None = None

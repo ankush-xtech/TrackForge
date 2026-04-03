@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -10,8 +10,10 @@ interface AuthGuardProps {
 
 export function AuthGuard({ children }: AuthGuardProps) {
   const router = useRouter();
-  const { isAuthenticated, isLoading, fetchMe, accessToken } = useAuthStore();
+  const { isAuthenticated, isLoading, fetchMe, accessToken, user } =
+    useAuthStore();
   const [mounted, setMounted] = useState(false);
+  const hasFetched = useRef(false);
 
   useEffect(() => {
     setMounted(true);
@@ -25,11 +27,12 @@ export function AuthGuard({ children }: AuthGuardProps) {
       return;
     }
 
-    // Validate token by fetching current user
-    if (isAuthenticated && !isLoading) {
+    // Only fetch /me once per mount (not on every re-render)
+    if (!hasFetched.current) {
+      hasFetched.current = true;
       fetchMe();
     }
-  }, [mounted, accessToken, isAuthenticated, isLoading, fetchMe, router]);
+  }, [mounted, accessToken, fetchMe, router]);
 
   if (!mounted) {
     return (
@@ -42,7 +45,19 @@ export function AuthGuard({ children }: AuthGuardProps) {
     );
   }
 
-  if (!isAuthenticated || !accessToken) {
+  if (!accessToken) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-slate-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto mb-4"></div>
+          <p className="text-slate-600">Redirecting to login...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading only while the initial fetchMe is in progress
+  if (isLoading && !user) {
     return (
       <div className="flex items-center justify-center h-screen bg-slate-50">
         <div className="text-center">

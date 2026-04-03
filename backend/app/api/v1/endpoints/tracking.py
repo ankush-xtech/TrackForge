@@ -3,10 +3,10 @@ Time tracking API endpoints — used by the desktop agent and web dashboard.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -22,12 +22,15 @@ from app.schemas.tracking import (
     TimeEntryCreate,
     TimeEntryResponse,
     TimeEntryStop,
+    TimeEntryUpdate,
+    TrackingSummary,
 )
 
 router = APIRouter(prefix="/tracking", tags=["Time Tracking"])
 
 
 # ── Time Entries ──
+
 
 @router.post("/time-entries", response_model=TimeEntryResponse, status_code=201)
 async def start_time_entry(
@@ -53,7 +56,7 @@ async def start_time_entry(
         user_id=current_user.id,
         project_id=data.project_id,
         task_id=data.task_id,
-        start_time=data.start_time,
+        start_time=data.start_time or datetime.now(UTC),
         description=data.description,
         is_manual=data.is_manual,
     )
@@ -82,10 +85,64 @@ async def stop_time_entry(
     if entry.end_time is not None:
         raise HTTPException(status_code=400, detail="Time entry is already stopped")
 
-    entry.end_time = data.end_time
-    entry.duration_seconds = int((data.end_time - entry.start_time).total_seconds())
+    end = data.end_time or datetime.now(UTC)
+    entry.end_time = end
+    entry.duration_seconds = int((end - entry.start_time).total_seconds())
     await db.flush()
     return entry
+
+
+@router.patch("/time-entries/{entry_id}", response_model=TimeEntryResponse)
+async def update_time_entry(
+    entry_id: uuid.UUID,
+    data: TimeEntryUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a time entry (description, project, task)."""
+    result = await db.execute(
+        select(TimeEntry).where(
+            TimeEntry.id == entry_id,
+            TimeEntry.user_id == current_user.id,
+        )
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Time entry not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(entry, field, value)
+
+    # Recalculate duration if times changed
+    if entry.end_time and entry.start_time:
+        entry.duration_seconds = int(
+            (entry.end_time - entry.start_time).total_seconds()
+        )
+
+    await db.flush()
+    return entry
+
+
+@router.delete("/time-entries/{entry_id}", status_code=204)
+async def delete_time_entry(
+    entry_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a time entry."""
+    result = await db.execute(
+        select(TimeEntry).where(
+            TimeEntry.id == entry_id,
+            TimeEntry.user_id == current_user.id,
+        )
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Time entry not found")
+
+    await db.delete(entry)
+    await db.flush()
 
 
 @router.get("/time-entries", response_model=list[TimeEntryResponse])
@@ -138,7 +195,86 @@ async def get_active_entry(
     return result.scalar_one_or_none()
 
 
+# ── Summary / Stats ──
+
+
+@router.get("/summary", response_model=TrackingSummary)
+async def get_tracking_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get time tracking summary (today, this week, this month)."""
+    now = datetime.now(UTC)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today_start.weekday())
+    month_start = today_start.replace(day=1)
+
+    base_q = select(
+        func.coalesce(func.sum(TimeEntry.duration_seconds), 0)
+    ).where(TimeEntry.user_id == current_user.id)
+
+    today_result = await db.execute(
+        base_q.where(TimeEntry.start_time >= today_start)
+    )
+    today_seconds = today_result.scalar() or 0
+
+    week_result = await db.execute(
+        base_q.where(TimeEntry.start_time >= week_start)
+    )
+    week_seconds = week_result.scalar() or 0
+
+    month_result = await db.execute(
+        base_q.where(TimeEntry.start_time >= month_start)
+    )
+    month_seconds = month_result.scalar() or 0
+
+    # Count entries today
+    entries_count_result = await db.execute(
+        select(func.count(TimeEntry.id)).where(
+            TimeEntry.user_id == current_user.id,
+            TimeEntry.start_time >= today_start,
+        )
+    )
+    entries_today = entries_count_result.scalar() or 0
+
+    # Average activity percent (from completed entries today)
+    activity_result = await db.execute(
+        select(func.coalesce(func.avg(TimeEntry.activity_percent), 0.0)).where(
+            TimeEntry.user_id == current_user.id,
+            TimeEntry.start_time >= today_start,
+            TimeEntry.end_time.isnot(None),
+        )
+    )
+    avg_activity = round(float(activity_result.scalar() or 0), 1)
+
+    # Check for currently running entry
+    active_result = await db.execute(
+        select(TimeEntry.id, TimeEntry.start_time).where(
+            TimeEntry.user_id == current_user.id,
+            TimeEntry.end_time.is_(None),
+        )
+    )
+    active_row = active_result.first()
+    is_tracking = active_row is not None
+
+    # If currently tracking, add elapsed time to today's total
+    if is_tracking:
+        active_elapsed = int((now - active_row.start_time).total_seconds())
+        today_seconds += active_elapsed
+
+    return TrackingSummary(
+        today_seconds=today_seconds,
+        week_seconds=week_seconds,
+        month_seconds=month_seconds,
+        entries_today=entries_today,
+        avg_activity_percent=avg_activity,
+        is_tracking=is_tracking,
+        active_entry_id=str(active_row.id) if active_row else None,
+    )
+
+
 # ── Agent Sync (bulk data upload from desktop agent) ──
+
 
 @router.post("/sync", status_code=202)
 async def sync_agent_data(
@@ -179,4 +315,8 @@ async def sync_agent_data(
         db.add(usage)
 
     await db.flush()
-    return {"status": "accepted", "activity_logs": len(payload.activity_logs), "app_usage": len(payload.app_usage)}
+    return {
+        "status": "accepted",
+        "activity_logs": len(payload.activity_logs),
+        "app_usage": len(payload.app_usage),
+    }
