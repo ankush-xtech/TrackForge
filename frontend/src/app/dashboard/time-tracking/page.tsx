@@ -1,12 +1,15 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import {
   useTimeTrackingStore,
   type TimeEntry,
 } from "@/stores/time-tracking-store";
+import { useIdleDetection } from "@/hooks/use-idle-detection";
+import { useScreenshotCapture } from "@/hooks/use-screenshot-capture";
+import { IdlePopup } from "@/components/tracking/idle-popup";
 import {
   Clock,
   Play,
@@ -18,6 +21,10 @@ import {
   TrendingUp,
   Zap,
   ChevronDown,
+  Camera,
+  CameraOff,
+  Monitor,
+  AlertTriangle,
 } from "lucide-react";
 
 // ── Helpers ──
@@ -79,7 +86,11 @@ export default function TimeTrackingPage() {
     isLoading,
     error,
     elapsed,
+    idleDeducted,
+    screenshotCount,
     setElapsed,
+    deductIdleTime,
+    incrementScreenshots,
     fetchActiveEntry,
     fetchEntries,
     fetchSummary,
@@ -92,7 +103,50 @@ export default function TimeTrackingPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [description, setDescription] = useState("");
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
+  const [showIdlePopup, setShowIdlePopup] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const isTracking = !!activeEntry;
+
+  // ── Idle Detection ──
+  const { isIdle, idleSeconds } = useIdleDetection({
+    timeout: 5 * 60 * 1000, // 5 minutes
+    enabled: isTracking,
+    onIdle: () => {
+      setShowIdlePopup(true);
+    },
+    onActive: () => {
+      // Auto-dismiss if user starts moving before clicking a button
+      // (but we keep it shown so they must click Yes/No)
+    },
+  });
+
+  const handleYesWorking = useCallback(() => {
+    // User confirmed they were working — keep the time, dismiss popup
+    setShowIdlePopup(false);
+  }, []);
+
+  const handleNotWorking = useCallback(() => {
+    // User was NOT working — deduct the idle seconds from the session
+    deductIdleTime(idleSeconds);
+    setShowIdlePopup(false);
+  }, [deductIdleTime, idleSeconds]);
+
+  // ── Screenshot Capture ──
+  const {
+    hasPermission: hasScreenshotPermission,
+    isCapturing,
+    captureCount,
+    requestPermission: requestScreenshotPermission,
+    stopCapture: stopScreenshotCapture,
+  } = useScreenshotCapture({
+    interval: 200 * 1000, // ~3m20s → 3 screenshots per 10 minutes
+    enabled: isTracking && !showIdlePopup, // pause captures during idle popup
+    timeEntryId: activeEntry?.id || null,
+    onCapture: () => {
+      incrementScreenshots();
+    },
+  });
 
   // Fetch projects
   const { data: projects = [] } = useQuery({
@@ -140,9 +194,15 @@ export default function TimeTrackingPage() {
       project_id: selectedProjectId || undefined,
       description: description || undefined,
     });
+    // Prompt for screen share permission if not already granted
+    if (!hasScreenshotPermission) {
+      requestScreenshotPermission();
+    }
   };
 
   const handleStop = async () => {
+    stopScreenshotCapture();
+    setShowIdlePopup(false);
     await stopTimer();
     setDescription("");
     setSelectedProjectId("");
@@ -155,10 +215,21 @@ export default function TimeTrackingPage() {
   };
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
-  const isTracking = !!activeEntry;
+
+  // The effective elapsed minus any idle deductions
+  const effectiveElapsed = Math.max(0, elapsed - idleDeducted);
 
   return (
     <div className="p-8 max-w-6xl">
+      {/* Idle Detection Popup */}
+      {showIdlePopup && isTracking && (
+        <IdlePopup
+          idleSeconds={idleSeconds}
+          onYesWorking={handleYesWorking}
+          onNotWorking={handleNotWorking}
+        />
+      )}
+
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
@@ -199,14 +270,78 @@ export default function TimeTrackingPage() {
                 isTracking ? "text-green-700" : "text-primary-700"
               }`}
             >
-              {formatDuration(elapsed)}
+              {formatDuration(effectiveElapsed)}
             </div>
             {isTracking && (
               <p className="text-xs text-green-600 mt-2 font-medium">
                 Recording...
               </p>
             )}
+            {isTracking && idleDeducted > 0 && (
+              <p className="text-xs text-amber-600 mt-1 flex items-center justify-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                {formatHoursMinutes(idleDeducted)} idle deducted
+              </p>
+            )}
           </div>
+
+          {/* Screenshot & Idle status indicators (when tracking) */}
+          {isTracking && (
+            <div className="flex items-center gap-3 mb-5 p-3 bg-slate-50 rounded-lg">
+              {/* Screenshot status */}
+              <div className="flex items-center gap-2 flex-1">
+                {hasScreenshotPermission ? (
+                  <>
+                    <Camera className="w-4 h-4 text-green-600" />
+                    <div>
+                      <p className="text-xs font-medium text-green-700">
+                        {isCapturing ? "Capturing..." : "Screenshots On"}
+                      </p>
+                      <p className="text-[10px] text-slate-500">
+                        {screenshotCount || captureCount} taken
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <CameraOff className="w-4 h-4 text-slate-400" />
+                    <div>
+                      <p className="text-xs font-medium text-slate-600">
+                        Screenshots Off
+                      </p>
+                      <button
+                        onClick={requestScreenshotPermission}
+                        className="text-[10px] text-primary-600 hover:text-primary-700 underline"
+                      >
+                        Enable
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Activity status */}
+              <div className="flex items-center gap-2 flex-1">
+                <Monitor
+                  className={`w-4 h-4 ${
+                    isIdle ? "text-amber-500" : "text-green-600"
+                  }`}
+                />
+                <div>
+                  <p
+                    className={`text-xs font-medium ${
+                      isIdle ? "text-amber-700" : "text-green-700"
+                    }`}
+                  >
+                    {isIdle ? "Idle" : "Active"}
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    Activity monitor
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Project selector */}
           {!isTracking && (

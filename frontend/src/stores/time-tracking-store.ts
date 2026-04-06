@@ -37,6 +37,8 @@ interface TimeTrackingState {
   isLoading: boolean;
   error: string | null;
   elapsed: number; // live elapsed seconds for the timer display
+  idleDeducted: number; // total idle seconds deducted from current session
+  screenshotCount: number; // screenshots taken in current session
 
   // Actions
   fetchActiveEntry: () => Promise<void>;
@@ -54,6 +56,8 @@ interface TimeTrackingState {
   stopTimer: () => Promise<void>;
   deleteEntry: (entryId: string) => Promise<void>;
   setElapsed: (seconds: number) => void;
+  deductIdleTime: (seconds: number) => void;
+  incrementScreenshots: () => void;
   clearError: () => void;
 }
 
@@ -64,10 +68,18 @@ export const useTimeTrackingStore = create<TimeTrackingState>((set, get) => ({
   isLoading: false,
   error: null,
   elapsed: 0,
+  idleDeducted: 0,
+  screenshotCount: 0,
 
   clearError: () => set({ error: null }),
 
   setElapsed: (seconds: number) => set({ elapsed: seconds }),
+
+  deductIdleTime: (seconds: number) =>
+    set((state) => ({ idleDeducted: state.idleDeducted + seconds })),
+
+  incrementScreenshots: () =>
+    set((state) => ({ screenshotCount: state.screenshotCount + 1 })),
 
   fetchActiveEntry: async () => {
     try {
@@ -108,7 +120,7 @@ export const useTimeTrackingStore = create<TimeTrackingState>((set, get) => ({
         ...data,
         start_time: new Date().toISOString(),
       });
-      set({ activeEntry: res.data, elapsed: 0 });
+      set({ activeEntry: res.data, elapsed: 0, idleDeducted: 0, screenshotCount: 0 });
       // Refresh summary
       get().fetchSummary();
     } catch (err: any) {
@@ -131,7 +143,7 @@ export const useTimeTrackingStore = create<TimeTrackingState>((set, get) => ({
         `/tracking/time-entries/${activeEntry.id}/stop`,
         { end_time: new Date().toISOString() }
       );
-      set({ activeEntry: null, elapsed: 0 });
+      set({ activeEntry: null, elapsed: 0, idleDeducted: 0, screenshotCount: 0 });
       // Refresh entries and summary
       get().fetchEntries();
       get().fetchSummary();

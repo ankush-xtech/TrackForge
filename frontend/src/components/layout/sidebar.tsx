@@ -11,13 +11,19 @@ import {
   Clock,
   Settings,
   LogOut,
+  BarChart3,
+  Activity,
+  Camera,
 } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/dashboard/team", label: "Team", icon: Users },
-  { href: "/dashboard/projects", label: "Projects", icon: FolderOpen },
   { href: "/dashboard/time-tracking", label: "Time Tracking", icon: Clock },
+  { href: "/dashboard/reports", label: "Reports", icon: BarChart3 },
+  { href: "/dashboard/activity", label: "Team Activity", icon: Activity },
+  { href: "/dashboard/screenshots", label: "Screenshots", icon: Camera },
+  { href: "/dashboard/projects", label: "Projects", icon: FolderOpen },
+  { href: "/dashboard/team", label: "Team", icon: Users },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
@@ -38,7 +44,9 @@ export function Sidebar() {
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive =
-            pathname === item.href || pathname.startsWith(item.href + "/");
+            item.href === "/dashboard"
+              ? pathname === "/dashboard"
+              : pathname === item.href || pathname.startsWith(item.href + "/");
 
           return (
             <Link
