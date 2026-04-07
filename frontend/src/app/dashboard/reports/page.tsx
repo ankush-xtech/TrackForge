@@ -322,7 +322,7 @@ export default function ReportsPage() {
                       app.category === "productive"
                         ? "bg-green-50 text-green-700"
                         : app.category === "unproductive"
-                        ? "bg-red-50 text-red-700"
+                        ? "bg-red-50 text-red-600"
                         : "bg-slate-100 text-slate-600"
                     }`}
                   >

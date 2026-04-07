@@ -4,6 +4,8 @@ import { apiClient } from "@/lib/api-client";
 export interface TimeEntry {
   id: string;
   user_id: string;
+  user_name: string | null;
+  user_email: string | null;
   project_id: string | null;
   task_id: string | null;
   start_time: string;

@@ -213,9 +213,13 @@ async def get_app_usage_summary(
             app_name=row.app_name,
             category=row.category,
             total_seconds=int(row.total_seconds),
-            session_count=row.session_count,
+            session_count=int(row.session_count),
         )
         for row in rows
     ]
 
-    return AppUsageSummary(apps=apps, period_start=date_from, period_end=date_to)
+    return AppUsageSummary(
+        apps=apps,
+        period_start=date_from,
+        period_end=date_to,
+    )

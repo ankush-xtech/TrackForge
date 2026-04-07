@@ -39,6 +39,11 @@ class User(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
         UUID(as_uuid=True), ForeignKey("teams.id"), nullable=True
     )
 
+    # Who invited/created this user (NULL for self-registered org creators)
+    created_by: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
+
     # Notification preferences (stored as JSON in settings)
     notification_settings: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
 

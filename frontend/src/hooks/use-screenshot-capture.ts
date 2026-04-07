@@ -171,11 +171,5 @@ export function useScreenshotCapture({
     };
   }, []);
 
-  return {
-    hasPermission,
-    isCapturing,
-    captureCount,
-    requestPermission,
-    stopCapture,
-  };
+  return { hasPermission, isCapturing, captureCount, requestPermission, stopCapture };
 }

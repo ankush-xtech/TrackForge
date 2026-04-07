@@ -230,11 +230,6 @@ export default function TeamActivityPage() {
           </div>
         )}
       </div>
-
-      {/* Auto-refresh notice */}
-      <p className="text-xs text-slate-400 text-center mt-4">
-        Auto-refreshes every 30 seconds
-      </p>
     </div>
   );
 }

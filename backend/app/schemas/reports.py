@@ -82,6 +82,8 @@ class TeamActivityResponse(BaseModel):
 class ScreenshotMeta(BaseModel):
     id: str
     user_id: str
+    user_name: str | None = None      # "John Doe" — filled by the list endpoint
+    user_email: str | None = None      # "john@company.com"
     time_entry_id: str
     file_path: str
     thumbnail_path: str | None

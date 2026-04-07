@@ -45,6 +45,25 @@ class TimeEntryResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TimeEntryListItem(BaseModel):
+    """Enriched time entry with employee name — used by list endpoint."""
+    id: uuid.UUID
+    user_id: uuid.UUID
+    user_name: str | None = None
+    user_email: str | None = None
+    project_id: uuid.UUID | None
+    task_id: uuid.UUID | None
+    start_time: datetime
+    end_time: datetime | None
+    duration_seconds: int
+    activity_percent: float
+    mouse_events: int
+    keyboard_events: int
+    is_manual: bool
+    description: str | None
+    created_at: datetime
+
+
 # ── Screenshot ──
 class ScreenshotCreate(BaseModel):
     time_entry_id: uuid.UUID

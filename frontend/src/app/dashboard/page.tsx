@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuthStore } from "@/stores/auth-store";
 import { apiClient } from "@/lib/api-client";
+import { isAtLeast, canInvite, ROLE_LABELS, type RoleKey } from "@/lib/roles";
 import {
   BarChart3,
   Users,
@@ -12,6 +13,7 @@ import {
   Zap,
   Activity,
   Play,
+  UserPlus,
 } from "lucide-react";
 
 interface DashboardStats {
@@ -44,31 +46,43 @@ export default function DashboardPage() {
   const [recentEntries, setRecentEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const userRole = user?.role || "employee";
+  const roleLabel = ROLE_LABELS[userRole as RoleKey] || userRole;
+
   useEffect(() => {
     const loadDashboard = async () => {
       setLoading(true);
       try {
-        // Fetch all dashboard data in parallel
-        const [summaryRes, projectsRes, usersRes, entriesRes] =
-          await Promise.allSettled([
-            apiClient.get("/tracking/summary"),
-            apiClient.get("/projects"),
-            apiClient.get("/users"),
-            apiClient.get("/tracking/time-entries?per_page=5"),
-          ]);
+        // Build parallel requests based on role
+        const requests: Promise<any>[] = [
+          apiClient.get("/tracking/summary"),
+          apiClient.get("/tracking/time-entries?per_page=5"),
+        ];
+
+        // Only admin+ fetches projects and users
+        if (isAtLeast(userRole, "org_admin")) {
+          requests.push(apiClient.get("/projects"));
+          requests.push(apiClient.get("/users"));
+        } else if (isAtLeast(userRole, "manager")) {
+          // Managers can see users (filtered by backend)
+          requests.push(apiClient.get("/projects"));
+          requests.push(apiClient.get("/users"));
+        }
+
+        const results = await Promise.allSettled(requests);
 
         const summary =
-          summaryRes.status === "fulfilled" ? summaryRes.value.data : {};
+          results[0].status === "fulfilled" ? results[0].value.data : {};
+        const entries =
+          results[1].status === "fulfilled" ? results[1].value.data || [] : [];
         const projects =
-          projectsRes.status === "fulfilled"
-            ? projectsRes.value.data?.projects || projectsRes.value.data || []
+          results.length > 2 && results[2].status === "fulfilled"
+            ? results[2].value.data?.projects || results[2].value.data || []
             : [];
         const users =
-          usersRes.status === "fulfilled"
-            ? usersRes.value.data?.users || usersRes.value.data || []
+          results.length > 3 && results[3].status === "fulfilled"
+            ? results[3].value.data?.users || results[3].value.data || []
             : [];
-        const entries =
-          entriesRes.status === "fulfilled" ? entriesRes.value.data || [] : [];
 
         setStats({
           totalProjects: Array.isArray(projects) ? projects.length : 0,
@@ -87,23 +101,10 @@ export default function DashboardPage() {
     };
 
     loadDashboard();
-  }, []);
+  }, [userRole]);
 
-  const statCards = [
-    {
-      label: "Total Projects",
-      value: String(stats.totalProjects),
-      icon: BarChart3,
-      color: "bg-blue-50 text-blue-600",
-      borderColor: "border-blue-200",
-    },
-    {
-      label: "Team Members",
-      value: String(stats.teamMembers),
-      icon: Users,
-      color: "bg-green-50 text-green-600",
-      borderColor: "border-green-200",
-    },
+  // ── Build stat cards based on role ──
+  const statCards: { label: string; value: string; icon: any; color: string; borderColor: string }[] = [
     {
       label: "Hours Today",
       value: formatHM(stats.todaySeconds),
@@ -120,11 +121,40 @@ export default function DashboardPage() {
     },
   ];
 
-  const quickActions = [
+  // Manager+ sees team count
+  if (isAtLeast(userRole, "manager")) {
+    statCards.push({
+      label: "Team Members",
+      value: String(stats.teamMembers),
+      icon: Users,
+      color: "bg-green-50 text-green-600",
+      borderColor: "border-green-200",
+    });
+  }
+
+  // Admin+ sees project count
+  if (isAtLeast(userRole, "org_admin")) {
+    statCards.push({
+      label: "Total Projects",
+      value: String(stats.totalProjects),
+      icon: BarChart3,
+      color: "bg-blue-50 text-blue-600",
+      borderColor: "border-blue-200",
+    });
+  }
+
+  // ── Build quick actions based on role ──
+  const quickActions: { label: string; icon: any; href: string }[] = [
     { label: "Start Tracking", icon: Play, href: "/dashboard/time-tracking" },
-    { label: "Create Project", icon: Zap, href: "/dashboard/projects" },
-    { label: "Invite Team Member", icon: Users, href: "/dashboard/team" },
   ];
+
+  if (isAtLeast(userRole, "org_admin")) {
+    quickActions.push({ label: "Create Project", icon: Zap, href: "/dashboard/projects" });
+  }
+
+  if (canInvite(userRole)) {
+    quickActions.push({ label: "Invite Team Member", icon: UserPlus, href: "/dashboard/team" });
+  }
 
   return (
     <div className="p-8 max-w-7xl">
@@ -134,7 +164,11 @@ export default function DashboardPage() {
           Welcome back, {user?.first_name}
         </h1>
         <p className="text-slate-600 mt-2">
-          Here's what's happening with your team today
+          {userRole === "employee"
+            ? "Here's your activity overview"
+            : userRole === "manager"
+            ? "Here's your team's overview"
+            : "Here's what's happening across your organization"}
         </p>
         {stats.isTracking && (
           <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 border border-green-200 rounded-full">
@@ -147,7 +181,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${statCards.length >= 4 ? "lg:grid-cols-4" : statCards.length === 3 ? "lg:grid-cols-3" : "lg:grid-cols-2"} gap-6 mb-8`}>
         {statCards.map((stat) => {
           const Icon = stat.icon;
           return (
@@ -259,80 +293,82 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Team Status */}
-      <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900 mb-4">
-          Getting Started
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="text-center py-6">
-            <div
-              className={`w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center ${
-                stats.teamMembers > 1
-                  ? "bg-green-100 text-green-600"
-                  : "bg-slate-100 text-slate-400"
-              }`}
-            >
-              <Users className="w-6 h-6" />
+      {/* Getting Started — only for admin role */}
+      {isAtLeast(userRole, "org_admin") && (
+        <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900 mb-4">
+            Organization Overview
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="text-center py-6">
+              <div
+                className={`w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center ${
+                  stats.teamMembers > 1
+                    ? "bg-green-100 text-green-600"
+                    : "bg-slate-100 text-slate-400"
+                }`}
+              >
+                <Users className="w-6 h-6" />
+              </div>
+              <p className="text-sm font-medium text-slate-900 mb-1">
+                {stats.teamMembers > 1
+                  ? `${stats.teamMembers} members`
+                  : "Invite your team"}
+              </p>
+              <Link
+                href="/dashboard/team"
+                className="text-primary-600 text-xs font-medium hover:underline"
+              >
+                Manage team
+              </Link>
             </div>
-            <p className="text-sm font-medium text-slate-900 mb-1">
-              {stats.teamMembers > 1
-                ? `${stats.teamMembers} members`
-                : "Invite your team"}
-            </p>
-            <Link
-              href="/dashboard/team"
-              className="text-primary-600 text-xs font-medium hover:underline"
-            >
-              Manage team
-            </Link>
-          </div>
-          <div className="text-center py-6">
-            <div
-              className={`w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center ${
-                stats.totalProjects > 0
-                  ? "bg-green-100 text-green-600"
-                  : "bg-slate-100 text-slate-400"
-              }`}
-            >
-              <TrendingUp className="w-6 h-6" />
+            <div className="text-center py-6">
+              <div
+                className={`w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center ${
+                  stats.totalProjects > 0
+                    ? "bg-green-100 text-green-600"
+                    : "bg-slate-100 text-slate-400"
+                }`}
+              >
+                <TrendingUp className="w-6 h-6" />
+              </div>
+              <p className="text-sm font-medium text-slate-900 mb-1">
+                {stats.totalProjects > 0
+                  ? `${stats.totalProjects} projects`
+                  : "Create a project"}
+              </p>
+              <Link
+                href="/dashboard/projects"
+                className="text-primary-600 text-xs font-medium hover:underline"
+              >
+                Manage projects
+              </Link>
             </div>
-            <p className="text-sm font-medium text-slate-900 mb-1">
-              {stats.totalProjects > 0
-                ? `${stats.totalProjects} projects`
-                : "Create a project"}
-            </p>
-            <Link
-              href="/dashboard/projects"
-              className="text-primary-600 text-xs font-medium hover:underline"
-            >
-              Manage projects
-            </Link>
-          </div>
-          <div className="text-center py-6">
-            <div
-              className={`w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center ${
-                stats.todaySeconds > 0
-                  ? "bg-green-100 text-green-600"
-                  : "bg-slate-100 text-slate-400"
-              }`}
-            >
-              <Clock className="w-6 h-6" />
+            <div className="text-center py-6">
+              <div
+                className={`w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center ${
+                  stats.todaySeconds > 0
+                    ? "bg-green-100 text-green-600"
+                    : "bg-slate-100 text-slate-400"
+                }`}
+              >
+                <Clock className="w-6 h-6" />
+              </div>
+              <p className="text-sm font-medium text-slate-900 mb-1">
+                {stats.todaySeconds > 0
+                  ? `${formatHM(stats.todaySeconds)} tracked today`
+                  : "Start tracking time"}
+              </p>
+              <Link
+                href="/dashboard/time-tracking"
+                className="text-primary-600 text-xs font-medium hover:underline"
+              >
+                Time tracking
+              </Link>
             </div>
-            <p className="text-sm font-medium text-slate-900 mb-1">
-              {stats.todaySeconds > 0
-                ? `${formatHM(stats.todaySeconds)} tracked today`
-                : "Start tracking time"}
-            </p>
-            <Link
-              href="/dashboard/time-tracking"
-              className="text-primary-600 text-xs font-medium hover:underline"
-            >
-              Time tracking
-            </Link>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
