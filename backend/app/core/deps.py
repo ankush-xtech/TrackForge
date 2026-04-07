@@ -1,7 +1,12 @@
 """
 FastAPI dependency injection functions.
-Reusable dependencies for authentication, authorization, and database access.
+Uses the RoleService as the single source of truth for all permission checks.
+
+Open/Closed Principle: To add a new permission level, add to roles.py — not here.
+Dependency Inversion: Endpoints depend on abstractions (role_required), not concrete checks.
 """
+
+from typing import Callable
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -9,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.roles import role_service
 from app.core.security import decode_token
 from app.models.user import User
 
@@ -53,11 +59,33 @@ async def get_current_user(
     return user
 
 
+def role_required(minimum_role: str) -> Callable:
+    """
+    Factory that creates a FastAPI dependency requiring a minimum role level.
+
+    Usage in endpoints:
+        current_user: User = Depends(role_required("manager"))
+        current_user: User = Depends(role_required("org_admin"))
+    """
+
+    async def _check(current_user: User = Depends(get_current_user)) -> User:
+        if not role_service.is_at_least(current_user.role, minimum_role):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient permissions. {minimum_role} access or higher required.",
+            )
+        return current_user
+
+    return _check
+
+
+# ── Convenience aliases (backward-compatible) ──
+
 async def get_current_admin(
     current_user: User = Depends(get_current_user),
 ) -> User:
-    """Ensure the current user has admin privileges."""
-    if current_user.role not in ("super_admin", "org_admin"):
+    """Ensure the current user has admin privileges (org_admin or super_admin)."""
+    if not role_service.is_at_least(current_user.role, "org_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient permissions. Admin access required.",
@@ -69,7 +97,7 @@ async def get_current_manager(
     current_user: User = Depends(get_current_user),
 ) -> User:
     """Ensure the current user has at least manager privileges."""
-    if current_user.role not in ("super_admin", "org_admin", "manager"):
+    if not role_service.is_at_least(current_user.role, "manager"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient permissions. Manager access required.",
@@ -80,10 +108,7 @@ async def get_current_manager(
 async def get_current_active_verified_user(
     current_user: User = Depends(get_current_user),
 ) -> User:
-    """
-    Ensure the current user is active and has verified their email/account.
-    Useful for endpoints that require email verification.
-    """
+    """Ensure the current user is active and has verified their email."""
     if not current_user.is_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -116,7 +116,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  logout: () => {
+  logout: async () => {
+    // Stop any active timer before logging out
+    try {
+      const activeRes = await apiClient.get("/tracking/time-entries/active");
+      if (activeRes.data) {
+        await apiClient.patch(
+          `/tracking/time-entries/${activeRes.data.id}/stop`,
+          { end_time: new Date().toISOString() }
+        );
+      }
+    } catch {
+      // Best effort — if it fails, proceed with logout anyway
+    }
+
     if (typeof window !== "undefined") {
       localStorage.removeItem("access_token");
       localStorage.removeItem("refresh_token");

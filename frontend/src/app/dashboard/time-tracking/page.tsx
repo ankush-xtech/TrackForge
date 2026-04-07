@@ -10,6 +10,8 @@ import {
 import { useIdleDetection } from "@/hooks/use-idle-detection";
 import { useScreenshotCapture } from "@/hooks/use-screenshot-capture";
 import { IdlePopup } from "@/components/tracking/idle-popup";
+import { useAuthStore } from "@/stores/auth-store";
+import { isAtLeast } from "@/lib/roles";
 import {
   Clock,
   Play,
@@ -26,6 +28,31 @@ import {
   Monitor,
   AlertTriangle,
 } from "lucide-react";
+
+// ── StatCard component ──
+
+function StatCard({
+  label,
+  value,
+  detail,
+  icon,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-sm text-slate-500">{label}</p>
+        {icon}
+      </div>
+      <p className="text-2xl font-bold text-slate-900">{value}</p>
+      {detail && <p className="text-xs text-slate-400 mt-1">{detail}</p>}
+    </div>
+  );
+}
 
 // ── Helpers ──
 
@@ -99,6 +126,10 @@ export default function TimeTrackingPage() {
     deleteEntry,
     clearError,
   } = useTimeTrackingStore();
+
+  const { user } = useAuthStore();
+  const userRole = user?.role || "employee";
+  const canViewTeam = isAtLeast(userRole, "manager");
 
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [description, setDescription] = useState("");
@@ -181,6 +212,34 @@ export default function TimeTrackingPage() {
     }
   }, [activeEntry, setElapsed]);
 
+  // ── Auto-stop timer on browser close / tab close ──
+  useEffect(() => {
+    if (!activeEntry) return;
+
+    const handleBeforeUnload = () => {
+      // Use fetch with keepalive for reliable delivery during page unload
+      // (sendBeacon can't set auth headers, so we use fetch instead)
+      const token = localStorage.getItem("access_token");
+      const url = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1"}/tracking/time-entries/stop-active`;
+      try {
+        fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({}),
+          keepalive: true,
+        });
+      } catch {
+        // Best effort — browser is closing
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [activeEntry]);
+
   // Auto-clear errors
   useEffect(() => {
     if (error) {
@@ -190,14 +249,19 @@ export default function TimeTrackingPage() {
   }, [error, clearError]);
 
   const handleStart = async () => {
+    // Request screenshot permission FIRST so the permission dialog appears immediately
+    if (!hasScreenshotPermission) {
+      const granted = await requestScreenshotPermission();
+      if (!granted) {
+        // Even if they decline screenshots, still start the timer
+        console.warn("Screenshot permission denied — timer will run without captures");
+      }
+    }
+
     await startTimer({
       project_id: selectedProjectId || undefined,
       description: description || undefined,
     });
-    // Prompt for screen share permission if not already granted
-    if (!hasScreenshotPermission) {
-      requestScreenshotPermission();
-    }
   };
 
   const handleStop = async () => {
@@ -501,6 +565,11 @@ export default function TimeTrackingPage() {
             <table className="w-full">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
+                  {canViewTeam && (
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-slate-900">
+                      Employee
+                    </th>
+                  )}
                   <th className="px-6 py-3 text-left text-sm font-semibold text-slate-900">
                     Description
                   </th>
@@ -530,6 +599,27 @@ export default function TimeTrackingPage() {
                     key={entry.id}
                     className="hover:bg-slate-50 transition-colors"
                   >
+                    {canViewTeam && (
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 bg-gradient-to-br from-primary-400 to-primary-600 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0">
+                            {entry.user_name
+                              ? entry.user_name.split(" ").map((n) => n[0]).join("")
+                              : "?"}
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-slate-900 leading-tight">
+                              {entry.user_name || "Unknown"}
+                            </p>
+                            {entry.user_email && (
+                              <p className="text-[10px] text-slate-400 leading-tight">
+                                {entry.user_email}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                    )}
                     <td className="px-6 py-4">
                       <p className="text-sm font-medium text-slate-900">
                         {entry.description || "No description"}
@@ -595,31 +685,6 @@ export default function TimeTrackingPage() {
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-// ── Stat Card Component ──
-
-function StatCard({
-  label,
-  value,
-  detail,
-  icon,
-}: {
-  label: string;
-  value: string;
-  detail?: string;
-  icon: React.ReactNode;
-}) {
-  return (
-    <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-6">
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-sm text-slate-600">{label}</p>
-        {icon}
-      </div>
-      <p className="text-3xl font-bold text-slate-900">{value}</p>
-      {detail && <p className="text-xs text-slate-500 mt-2">{detail}</p>}
     </div>
   );
 }
